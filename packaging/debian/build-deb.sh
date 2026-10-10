@@ -73,8 +73,8 @@ Priority: optional
 Architecture: all
 Depends: python3 (>= 3.9), python3-pygame (>= 2.0), python3-numpy (>= 1.19)
 Installed-Size: $SIZE
-Maintainer: Pixel TD Maintainers <pixel-td@example.invalid>
-Homepage: https://github.com/OWNER/pixel-td
+Maintainer: Pixel TD Maintainers <f4talk122@gmail.com>
+Homepage: https://github.com/nataciolfi/pixel-td
 Description: pixel-art tower defense with infinite waves and absurd numbers
  Build towers anywhere off the road and survive endless, exponentially
  growing waves (numbers reach millions, billions, trillions and beyond).
