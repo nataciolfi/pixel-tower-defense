@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pixel-td"
+dynamic = ["version"]
+description = "Pixel-art tower defense with infinite waves, exponential numbers and prestige"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["game", "tower-defense", "pygame", "pixel-art", "idle", "incremental"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: X11 Applications",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Games/Entertainment :: Real Time Strategy",
+]
+dependencies = ["pygame>=2.0", "numpy>=1.19"]
+
+[project.scripts]
+pixel-td = "pixel_td.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "pixel_td.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
