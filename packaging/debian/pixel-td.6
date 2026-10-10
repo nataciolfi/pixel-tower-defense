@@ -1,0 +1,31 @@
+.TH PIXEL-TD 6 "2026" "pixel-td 1.0.0" "Games"
+.SH NAME
+pixel-td \- pixel-art tower defense with infinite waves and exponential numbers
+.SH SYNOPSIS
+.B pixel-td
+[\fB\-\-fullscreen\fR] [\fB\-\-save\-dir\fR \fIDIR\fR] [\fB\-\-reset\-save\fR] [\fB\-\-seed\fR \fIN\fR] [\fB\-\-version\fR]
+.SH DESCRIPTION
+Build towers anywhere off the road, survive endless waves whose enemy count, health,
+damage and gold rewards grow exponentially, then Ascend (prestige) for permanent bonuses.
+.SH OPTIONS
+.TP
+.B \-\-fullscreen
+Start in fullscreen mode. F11 toggles fullscreen in game.
+.TP
+.BI \-\-save\-dir " DIR"
+Store the save file in DIR instead of the default location.
+.TP
+.B \-\-reset\-save
+Delete the existing save file before starting.
+.TP
+.BI \-\-seed " N"
+Seed the random number generator.
+.SH CONTROLS
+1-9, 0 select tower; left click places/selects; right click or Esc cancels; Space starts the next wave;
+P pauses; +/- changes game speed; Q meteor; W time freeze; U upgrades the selected tower; Esc opens the menu.
+.SH FILES
+.TP
+.I $XDG_DATA_HOME/pixel-td/save.json
+(default ~/.local/share/pixel-td/save.json) Progress, written atomically after every wave; a .bak copy is kept.
+.SH LICENSE
+MIT

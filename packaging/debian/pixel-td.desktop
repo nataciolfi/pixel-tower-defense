@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Pixel Tower Defense
+GenericName=Tower Defense Game
+Comment=Pixel-art tower defense with infinite waves and absurd numbers
+Exec=pixel-td
+Icon=pixel-td
+Terminal=false
+Categories=Game;StrategyGame;
+Keywords=tower;defense;pixel;idle;incremental;
+StartupNotify=true

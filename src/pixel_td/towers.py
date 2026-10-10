@@ -1,0 +1,243 @@
+"""Tower definitions, scaling and hit-scan combat (vectorised target queries)."""
+import math
+from dataclasses import dataclass
+import numpy as np
+from .config import *
+from .bignum import safe_pow, MAXF, fmt, to_int
+from .enemies import T_ISBOSS
+
+MODE_NAMES = ["First", "Last", "Strongest", "Weakest", "Closest"]
+
+
+@dataclass(frozen=True)
+class TowerType:
+    key: str
+    name: str
+    color: tuple
+    cost: int
+    dmg: float
+    range: float
+    rate: float
+    mode: int
+    desc: str
+    unlock: int = 0       # best wave reached (across runs) needed to unlock
+
+
+TOWER_TYPES = [
+    TowerType("archer", "Archer", (96, 176, 72), 40, 12, 150, 2.0, 0, "Fast & cheap. Crits.", 0),
+    TowerType("cannon", "Cannon", (210, 120, 60), 120, 45, 130, 0.7, 0, "Splash damage.", 0),
+    TowerType("frost", "Frost", (110, 200, 255), 90, 8, 120, 1.3, 4, "Area slow.", 0),
+    TowerType("tesla", "Tesla", (170, 110, 255), 250, 30, 110, 1.0, 0, "Chain lightning.", 5),
+    TowerType("sniper", "Sniper", (230, 70, 70), 400, 220, 330, 0.35, 2, "Huge hit, pierces armor.", 8),
+    TowerType("toxin", "Toxin", (60, 230, 160), 200, 6, 120, 1.1, 0, "Poison ignores armor.", 3),
+    TowerType("laser", "Laser", (255, 120, 170), 300, 4, 140, 8.0, 0, "Beam ramps up on one target.", 12),
+    TowerType("mortar", "Mortar", (200, 175, 90), 350, 160, 280, 0.25, 0, "Long-range big splash.", 16),
+    TowerType("beacon", "Beacon", (255, 200, 60), 500, 0, 120, 0.0, 0, "Buffs damage of nearby towers.", 20),
+    TowerType("void", "Void", (120, 80, 210), 700, 10, 150, 0.8, 2, "Hits % of max HP (true damage).", 30),
+]
+BY_KEY = {t.key: t for t in TOWER_TYPES}
+
+
+class Tower:
+    def __init__(self, tt, x, y, paid, meta=None):
+        self.tt, self.x, self.y, self.meta = tt, x, y, meta
+        self.level = 1
+        self.cd = 0.0
+        self.flash = 0.0
+        self.mode = tt.mode
+        self.invested = int(paid)
+        self.buff = 1.0           # damage multiplier from Beacons (set by Simulation)
+        self.stacks = 0           # laser ramp
+        self.last = -1
+        self.recalc()
+
+    # ---- stats ---------------------------------------------------------------
+    def recalc(self):
+        tt, l, m = self.tt, self.level, self.meta
+        dm = m.dmg_mult() if m else 1.0
+        rm = m.rate_mult() if m else 1.0
+        self.damage = min(MAXF, tt.dmg * safe_pow(DMG_G, l - 1) * safe_pow(MILESTONE, l // 10) * dm)
+        self.range = tt.range * (1 + min(0.6, 0.006 * (l - 1)))
+        self.rate = tt.rate * (1 + min(1.5, 0.01 * (l - 1))) * rm
+        self.crit = self.crit_mult = self.splash = self.slow_amt = self.slow_dur = 0.0
+        self.chain = self.void_n = 0
+        self.pierce = self.aura = self.void_pct = 0.0
+        self.poison_dur = 0.0
+        k = tt.key
+        if k == "archer":
+            self.crit, self.crit_mult = 0.10 + min(0.40, 0.005 * (l - 1)), 2.5 + 0.02 * (l - 1)
+        elif k == "cannon":
+            self.splash = 50 * (1 + min(0.8, 0.01 * (l - 1)))
+        elif k == "frost":
+            self.splash, self.slow_amt, self.slow_dur = 55, 0.35 + min(0.45, 0.01 * (l - 1)), 2.0
+        elif k == "tesla":
+            self.chain = min(14, 3 + l // 8)
+        elif k == "sniper":
+            self.pierce = 0.6 + min(0.3, 0.004 * (l - 1))
+        elif k == "toxin":
+            self.splash, self.poison_dur = 45, 3.0
+        elif k == "laser":
+            self.pierce = 0.3
+        elif k == "mortar":
+            self.splash = 85 * (1 + min(0.8, 0.01 * (l - 1)))
+        elif k == "beacon":
+            self.aura = min(1e6, 0.2 * safe_pow(1.03, l - 1))
+        elif k == "void":
+            self.void_pct = 0.004 + min(0.02, 0.0004 * (l - 1))
+            self.void_n = min(8, 2 + l // 15)
+
+    def special_text(self):
+        k = self.tt.key
+        if k == "archer": return f"Crit {self.crit*100:.0f}% x{self.crit_mult:.1f}"
+        if k == "cannon": return f"Splash {self.splash:.0f}px"
+        if k == "frost":  return f"Slow {self.slow_amt*100:.0f}% / {self.splash:.0f}px"
+        if k == "tesla":  return f"Chain {self.chain} targets"
+        if k == "sniper": return f"Pierce {self.pierce*100:.0f}% armor"
+        if k == "laser":  return "Ramp up to x2.8"
+        if k == "mortar": return f"Splash {self.splash:.0f}px"
+        if k == "beacon": return f"+{self.aura*100:.0f}% dmg in range"
+        if k == "void":   return f"{self.void_pct*100:.2f}% HP x{self.void_n}"
+        return f"Poison {fmt(self.damage * self.buff * 2)}/s"
+
+    # ---- upgrade economy -----------------------------------------------------
+    def _c(self, level):
+        return self.tt.cost * UPG_BASE * safe_pow(UPG_G, level - 1)
+
+    def cost_levels(self, n):
+        c = self._c(self.level)
+        if n == 1:
+            return to_int(math.ceil(min(c, MAXF)))
+        tot = c * (safe_pow(UPG_G, n) - 1) / (UPG_G - 1)
+        return to_int(math.ceil(min(tot, MAXF)))
+
+    def max_levels(self, gold):
+        c = self._c(self.level)
+        if c >= MAXF or gold <= 0:
+            return 0
+        gf = float(min(gold, 10 ** 300))
+        n = int(math.log(gf * (UPG_G - 1) / c + 1) / math.log(UPG_G))
+        while n > 0 and self.cost_levels(n) > gold:
+            n -= 1
+        return max(0, n)
+
+    def sell_value(self):
+        return int(self.invested * SELL_RATIO)
+
+    def set_level(self, lv):
+        self.level = lv
+        self.recalc()
+
+
+# ---------------------------------------------------------------------------------
+def _pick(pool, cand, d2, mode):
+    if mode == 0: return cand[int(np.argmax(pool.dist[cand]))]
+    if mode == 1: return cand[int(np.argmin(pool.dist[cand]))]
+    if mode == 2: return cand[int(np.argmax(pool.hp[cand]))]
+    if mode == 3: return cand[int(np.argmin(pool.hp[cand]))]
+    return cand[int(np.argmin(d2))]
+
+
+def _in_radius(pool, cx, cy, r):
+    i = pool.idx
+    dx, dy = pool.x[i] - cx, pool.y[i] - cy
+    d2 = dx * dx + dy * dy
+    m = d2 <= r * r
+    return i[m], d2[m]
+
+
+def tower_fire(sim, t):
+    """Try to shoot. Returns True if a shot was fired."""
+    pool, fx, rng = sim.pool, sim.fx, sim.rng
+    i = pool.idx
+    if i.size == 0:
+        return False
+    dx, dy = pool.x[i] - t.x, pool.y[i] - t.y
+    d2 = dx * dx + dy * dy
+    m = d2 <= t.range * t.range
+    if not m.any():
+        return False
+    cand, cd2 = i[m], d2[m]
+    tg = _pick(pool, cand, cd2, t.mode)
+    tx, ty = float(pool.x[tg]), float(pool.y[tg])
+    col = t.tt.color
+    k = t.tt.key
+    D = t.damage * t.buff
+    t.flash = 0.1
+    one = np.array([tg])
+    sy = t.y - 18
+
+    if k == "archer":
+        dmg = D
+        if rng.random() < t.crit:
+            dmg *= t.crit_mult
+            fx.text(tx, ty - 18, fmt(dmg), (255, 230, 80))
+        pool.damage(one, dmg)
+        fx.line([(t.x, sy), (tx, ty)], col, 0.08, 2)
+        fx.burst(tx, ty, col, 3, 60, 0.25, 2)
+    elif k == "sniper":
+        pool.damage(one, D, t.pierce)
+        fx.line([(t.x, sy), (tx, ty)], (255, 255, 255), 0.14, 3)
+        fx.line([(t.x, sy), (tx, ty)], col, 0.2, 5)
+        fx.burst(tx, ty, (255, 220, 200), 6, 110, 0.3, 4)
+    elif k == "cannon" or k == "mortar":
+        ii, d2s = _in_radius(pool, tx, ty, t.splash)
+        fall = 1.0 - (0.4 if k == "mortar" else 0.5) * np.sqrt(d2s) / t.splash
+        pool.damage(ii, D * fall)
+        fx.line([(t.x, sy), (tx, ty)], (255, 200, 120), 0.07, 3)
+        fx.ring(tx, ty, 6, t.splash, (255, 170, 60) if k == "cannon" else (240, 220, 120), 0.28, 3)
+        fx.burst(tx, ty, (255, 140, 40), 8 if k == "cannon" else 14, 130, 0.4, 4)
+        fx.shake_add(1.5 if k == "cannon" else 3)
+    elif k == "frost":
+        ii, _ = _in_radius(pool, tx, ty, t.splash)
+        pool.damage(ii, D)
+        pool.apply_slow(ii, t.slow_amt, t.slow_dur)
+        fx.ring(tx, ty, 6, t.splash, col, 0.35, 3)
+        fx.burst(tx, ty, (220, 245, 255), 6, 70, 0.4, 2)
+        fx.line([(t.x, sy), (tx, ty)], (180, 230, 255), 0.06, 2)
+    elif k == "toxin":
+        ii, _ = _in_radius(pool, tx, ty, t.splash)
+        pool.damage(ii, D)
+        pool.apply_poison(ii, D * 2.0, t.poison_dur)
+        fx.ring(tx, ty, 4, t.splash, col, 0.4, 3)
+        fx.burst(tx, ty, col, 6, 50, 0.5, 4)
+        fx.line([(t.x, sy), (tx, ty)], col, 0.06, 2)
+    elif k == "tesla":
+        hit = [int(tg)]
+        cur = tg
+        pts = [(t.x, sy), (tx, ty)]
+        for _ in range(t.chain - 1):
+            cx, cy = float(pool.x[cur]), float(pool.y[cur])
+            ii, d2s = _in_radius(pool, cx, cy, 90.0)
+            ok = ~np.isin(ii, hit)
+            if not ok.any():
+                break
+            ii, d2s = ii[ok], d2s[ok]
+            cur = ii[int(np.argmin(d2s))]
+            hit.append(int(cur))
+            pts.append((float(pool.x[cur]), float(pool.y[cur])))
+        pool.damage(np.array(hit), D * (0.85 ** np.arange(len(hit))))
+        fx.bolt(pts, col)
+        fx.burst(tx, ty, (230, 200, 255), 4, 80, 0.25, 2)
+    elif k == "laser":
+        t.stacks = min(15, t.stacks + 1) if int(tg) == t.last else 0
+        t.last = int(tg)
+        pool.damage(one, D * (1.0 + 0.12 * t.stacks), t.pierce)
+        fx.line([(t.x, sy), (tx, ty)], (255, 230, 240), 0.05, 1 + t.stacks // 6)
+        if t.stacks >= 8:
+            fx.burst(tx, ty, col, 1, 40, 0.2, 2)
+    elif k == "void":
+        n = t.void_n
+        sel = cand
+        if cand.size > n:
+            sel = cand[np.argpartition(-pool.hp[cand], n - 1)[:n]]
+        pool.damage(sel, D)
+        frac = t.void_pct * np.where(T_ISBOSS[pool.typ[sel]], 0.2, 1.0)
+        pool.true_damage(sel, pool.maxhp[sel] * frac)
+        for j in sel:
+            jx, jy = float(pool.x[j]), float(pool.y[j])
+            fx.line([(t.x, sy), (jx, jy)], col, 0.12, 2)
+            fx.ring(jx, jy, 4, 22, col, 0.3, 2)
+            fx.burst(jx, jy, (200, 160, 255), 3, 60, 0.3, 2)
+    else:  # beacon never fires
+        return False
+    return True
