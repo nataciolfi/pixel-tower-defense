@@ -1,14 +1,19 @@
 """Main application: scenes, input, fixed-timestep loop, save/load glue."""
+import time
 import pygame
 from .config import *
-from .sim import Simulation, PREP, WAVE, LOST
-from .meta import Meta, ascend_gain
+from .sim import Simulation, PREP, WAVE, LOST, NullFx
+from .meta import Meta
 from .save import SaveStore
 from .sprites import Sprites
 from .effects import Effects
 from .render import WorldRenderer, MAP_RECT
 from .ui import UI
-from .menu import Menu, MetaScreen, HelpScreen
+from .menu import Menu, MapSelect, MetaScreen, HelpScreen
+from .maps import MAPS, BY_KEY as MAP_BY_KEY, DEFAULT_MAP
+from .pathing import Path
+from .bignum import fmt
+from .towers import TOWER_TYPES, CATEGORIES, cat_indices
 
 
 def make_fonts():
@@ -31,17 +36,19 @@ class Game:
         self.fonts = make_fonts()
         self.fx = Effects(self.fonts[14])
         self.sim = Simulation(self.fx, seed=seed, meta=self.meta)
-        self.sprites = Sprites(self.sim.path)
+        self.sprites = Sprites(MAPS)
+        self.map_paths = {m.key: Path(m.tiles).total for m in MAPS}
         try:
             pygame.display.set_icon(self.sprites.app_icon())
         except Exception:
             pass
         self.world = WorldRenderer(self.sprites, self.fonts)
         self.ui = UI(screen, self.fonts, self.sprites)
-        self.screens = {"menu": Menu(self), "meta": MetaScreen(self), "help": HelpScreen(self)}
+        self.screens = {"menu": Menu(self), "maps": MapSelect(self), "meta": MetaScreen(self), "help": HelpScreen(self)}
         self.scene = "menu"
         self.running = True
         self.banner = ""
+        self.meta_tab = 0
         self._reset_play_state()
         self.mouse = (0, 0)
         self.click = False
@@ -51,7 +58,10 @@ class Game:
         self.selected = None
         self.placing = None
         self.hover_type = None
+        self.cat = 0
         self.speed = 0
+        self.eff_speed = 1.0
+        self.set_speed(0)
         self.paused = False
         self.pause_menu = False
         self.auto = False
@@ -61,6 +71,11 @@ class Game:
         self.acc = 0.0
 
     # ---- helpers -----------------------------------------------------------------
+    def set_speed(self, i):
+        """Select a speed. Above x4 the visual effects are switched off to save CPU."""
+        self.speed = max(0, min(len(SPEEDS) - 1, i))
+        self.sim.fx = self.fx if self.speed <= FX_MAX_SPEED_INDEX else NullFx()
+
     @staticmethod
     def snap(x, y):
         return int(round(x / PX)) * PX, int(round(y / PX)) * PX
@@ -70,7 +85,7 @@ class Game:
         return s.state == LOST or (s.won and not self.win_ack) or self.pause_menu
 
     def ascend_gain(self):
-        return ascend_gain(self.sim.wave)
+        return self.sim.ascend_gain()
 
     # ---- save / load ---------------------------------------------------------------
     def save(self):
@@ -100,8 +115,10 @@ class Game:
         self._seen_cleared = self.sim.waves_cleared
         self.scene = "play"
 
-    def new_run(self):
-        self.sim.reset()
+    def new_run(self, map_key=None):
+        if map_key is None:
+            map_key = self.sim.map.key
+        self.sim.set_map(map_key)
         self.run_data = None
         self._enter_play()
         self.save()
@@ -117,7 +134,7 @@ class Game:
         self._enter_play()
 
     def restart(self):
-        self.new_run()
+        self.new_run(self.sim.map.key)
 
     def to_menu(self):
         self.save()
@@ -129,27 +146,34 @@ class Game:
 
     def open_meta(self):
         self.banner = ""
+        self.meta_tab = 0
         self.scene = "meta"
 
     def close_meta(self):
         if self.banner:
             self.banner = ""
-            self.new_run()
+            self.scene = "maps"          # pick the map for the next run
         else:
             self.scene = "menu"
 
     def ascend(self):
         wave = self.sim.wave
-        gain = ascend_gain(wave)
+        gain = self.sim.ascend_gain()
+        shards = self.sim.shard_gain()
         m = self.meta
         m.ap += gain
         m.total_ap += gain
+        m.shards += shards
+        m.total_shards += shards
         m.ascensions += 1
         self.sim.reset()
         self.run_data = None
         self.pause_menu = False
         self._reset_play_state()
-        self.banner = f"Ascended from wave {wave}:  +{gain} AP!   Spend them, then start a new run."
+        extra = f" and +{shards} Shards" if shards else ""
+        self.banner = (f"Ascended from wave {wave} on {self.sim.map.name}:  +{fmt(gain)} AP{extra}!   "
+                       "Spend them, then start a new run.")
+        self.meta_tab = 0
         self.scene = "meta"
         self.save()
 
@@ -184,7 +208,7 @@ class Game:
                 k = e.key
                 if k == pygame.K_F11:
                     self.set_fullscreen(not self.fullscreen)
-                elif self.scene in ("meta", "help"):
+                elif self.scene in ("meta", "help", "maps"):
                     if k == pygame.K_ESCAPE:
                         self.scene = "menu" if not self.banner else self.scene
                 elif self.scene == "play":
@@ -214,19 +238,23 @@ class Game:
         elif k == pygame.K_u and self.selected:
             sim.upgrade(self.selected, 1)
         elif k in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
-            self.speed = min(len(SPEEDS) - 1, self.speed + 1)
+            self.set_speed(self.speed + 1)
         elif k in (pygame.K_MINUS, pygame.K_KP_MINUS):
-            self.speed = max(0, self.speed - 1)
-        else:
-            idx = None
-            if pygame.K_1 <= k <= pygame.K_9:
-                idx = k - pygame.K_1
-            elif k == pygame.K_0:
-                idx = 9
-            if idx is not None and sim.unlocked(idx):
-                self.placing = idx
-                self.selected = None
-                self.meteor_armed = False
+            self.set_speed(self.speed - 1)
+        elif k == pygame.K_g:
+            sim.auto_mode = (sim.auto_mode + 1) % 3
+        elif pygame.K_1 <= k <= pygame.K_7:
+            self.cat = k - pygame.K_1
+        elif k in (pygame.K_z, pygame.K_x, pygame.K_c, pygame.K_v, pygame.K_b):
+            slot = (pygame.K_z, pygame.K_x, pygame.K_c, pygame.K_v, pygame.K_b).index(k)
+            items = cat_indices(CATEGORIES[self.cat][0])
+            if slot < len(items):
+                ti = items[slot]
+                tt = TOWER_TYPES[ti]
+                if sim.unlocked(ti) and not (tt.legendary and sim.has_legend(tt.key)):
+                    self.placing = ti
+                    self.selected = None
+                    self.meteor_armed = False
 
     def map_click(self):
         sim = self.sim
@@ -237,7 +265,7 @@ class Game:
         elif self.placing is not None:
             gx, gy = self.snap(mx, my)
             if sim.place(self.placing, gx, gy) is not None:
-                if sim.gold < sim.build_cost(self.placing):
+                if TOWER_TYPES[self.placing].legendary or sim.gold < sim.build_cost(self.placing):
                     self.placing = None
         else:
             best, bd = None, 22 * 22
@@ -257,13 +285,14 @@ class Game:
             self.selected = None
         if not self.paused and not self.modal():
             self.acc += min(dt, 0.1) * SPEEDS[self.speed]
-            n = 0
-            while self.acc >= SIM_DT and n < MAX_TICKS_PER_FRAME:
+            n, t0 = 0, time.perf_counter()
+            while self.acc >= SIM_DT and n < MAX_TICKS_PER_FRAME and time.perf_counter() - t0 < TICK_BUDGET:
                 sim.step(SIM_DT)
                 self.acc -= SIM_DT
                 n += 1
-            if n >= MAX_TICKS_PER_FRAME:
-                self.acc = 0.0
+            if self.acc >= SIM_DT:                     # can't keep up: drop the backlog instead of spiralling
+                self.acc = SIM_DT
+            self.eff_speed = 0.9 * self.eff_speed + 0.1 * (n * SIM_DT / max(dt, 1e-3))
             if self.auto and sim.state == PREP:
                 self.auto_t += dt
                 if self.auto_t > 1.5:

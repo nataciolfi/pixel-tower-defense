@@ -25,25 +25,47 @@ UPGRADES = [
 BY_KEY = {u.key: u for u in UPGRADES}
 
 
-def ascend_gain(wave):
-    """Ascension Points gained for ending a run at `wave`."""
+SHARD_MIN_WAVE = 20      # ending a run below this wave pays no Shards
+
+
+def ascend_gain(wave, ap_mult=1.0):
+    """Ascension Points for ending a run at `wave` (harder maps pay more).
+
+    Polynomial up to wave 100 (about wave^1.8), then it DOUBLES every 100 waves, so very deep
+    runs (500, 1000 ...) pay enormously more than shallow ones."""
     if wave < 5:
         return 0
-    return int(0.5 * (wave / 5.0) ** 1.8)
+    base = 0.5 * (wave / 5.0) ** 1.8
+    boost = 2.0 ** min(max(0.0, wave - 100.0) / 100.0, 900.0)
+    return int(base * boost * ap_mult)
+
+
+def shard_gain(wave, map_level=1):
+    """Legend Shards (premium currency): small amounts, slowly growing with depth and map difficulty."""
+    if wave < SHARD_MIN_WAVE:
+        return 0
+    return 1 + int(wave) // 100 + (map_level - 1) // 2
 
 
 class Meta:
     def __init__(self):
         self.levels = {u.key: 0 for u in UPGRADES}
         self.ap = 0                 # unspent ascension points
-        self.total_ap = 0           # lifetime earned (each gives +1% damage)
+        self.total_ap = 0           # lifetime earned (permanent damage bonus, see dmg_mult)
         self.best_wave = 0
         self.ascensions = 0
         self.lifetime_kills = 0.0
+        self.map_best = {}          # best wave per map key
+        self.shards = 0             # premium currency (Legend Shards)
+        self.total_shards = 0
+        self.legends = set()        # legendary towers bought in the Vault (permanent)
 
     # ---- multipliers ---------------------------------------------------------
     def lv(self, k): return self.levels[k]
-    def dmg_mult(self):   return (1 + 0.12 * self.lv("dmg")) * (1 + 0.01 * self.total_ap)
+    def dmg_mult(self):   return (1 + 0.12 * self.lv("dmg")) * self.lifetime_mult()
+    def lifetime_mult(self):
+        """Permanent bonus from every AP ever earned: +5% x sqrt(lifetime AP) (sub-linear on purpose)."""
+        return 1.0 + 0.05 * math.sqrt(float(min(self.total_ap, 10 ** 300)))
     def gold_mult(self):  return 1 + 0.10 * self.lv("gold")
     def rate_mult(self):  return 1 + 0.03 * self.lv("rate")
     def base_mult(self):  return 1 + 0.15 * self.lv("base")
@@ -88,10 +110,25 @@ class Meta:
             n += 1
         return n
 
+    # ---- legendary vault (premium currency) ---------------------------------------
+    def owns_legend(self, key):
+        return key in self.legends
+
+    def can_buy_legend(self, key, price):
+        return key not in self.legends and self.shards >= price
+
+    def buy_legend(self, key, price):
+        if not self.can_buy_legend(key, price):
+            return False
+        self.shards -= price
+        self.legends.add(key)
+        return True
+
     # ---- persistence ---------------------------------------------------------
     def to_dict(self):
         return dict(levels=self.levels, ap=self.ap, total_ap=self.total_ap, best_wave=self.best_wave,
-                    ascensions=self.ascensions, lifetime_kills=self.lifetime_kills)
+                    ascensions=self.ascensions, lifetime_kills=self.lifetime_kills, map_best=self.map_best,
+                    shards=self.shards, total_shards=self.total_shards, legends=sorted(self.legends))
 
     @classmethod
     def from_dict(cls, d):
@@ -106,4 +143,10 @@ class Meta:
         m.best_wave = max(0, int(d.get("best_wave", 0)))
         m.ascensions = max(0, int(d.get("ascensions", 0)))
         m.lifetime_kills = float(d.get("lifetime_kills", 0.0))
+        m.shards = max(0, int(d.get("shards", 0)))
+        m.total_shards = max(0, int(d.get("total_shards", 0)))
+        lg = d.get("legends") or []
+        m.legends = {str(k) for k in lg} if isinstance(lg, (list, tuple, set)) else set()
+        mb = d.get("map_best") or {}
+        m.map_best = {str(k): max(0, int(v)) for k, v in mb.items()} if isinstance(mb, dict) else {}
         return m

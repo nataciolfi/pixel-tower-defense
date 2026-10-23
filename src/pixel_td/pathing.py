@@ -15,9 +15,17 @@ class Path:
         self.cum = np.concatenate([[0.0], np.cumsum(self.seg_len)])
         self.total = float(self.cum[-1])
         self.start = (float(pts[0, 0]), float(pts[0, 1]))
+        d = self.ab / self.seg_len[:, None]
+        self.nx, self.ny = -d[:, 1], d[:, 0]          # unit normals (for lateral offsets)
 
-    def positions(self, d):
-        return np.interp(d, self.cum, self.pts[:, 0]), np.interp(d, self.cum, self.pts[:, 1])
+    def positions(self, d, lat=None):
+        """Points at path distance d. `lat` shifts each point sideways (thick crowds)."""
+        x, y = np.interp(d, self.cum, self.pts[:, 0]), np.interp(d, self.cum, self.pts[:, 1])
+        if lat is not None:
+            seg = np.clip(np.searchsorted(self.cum, d, side="right") - 1, 0, len(self.nx) - 1)
+            x = x + self.nx[seg] * lat
+            y = y + self.ny[seg] * lat
+        return x, y
 
     def distance_to(self, x, y):
         apx, apy = x - self.a[:, 0], y - self.a[:, 1]

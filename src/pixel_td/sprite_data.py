@@ -171,21 +171,95 @@ TOWER_TOPS = {
              ".ocwCCcco.",
              ".occCCcco.",
              "..occcco.."],
+    "ballista": ["oo......oo",
+                 ".occooocc.",
+                 "..occwcco.",
+                 "...occco..",
+                 "...occco.."],
+    "flame": ["....oo....",
+              "...oyyo...",
+              "..oyccyo..",
+              "..occcco..",
+              "...occo..."],
+    "shock": ["..oooooo..",
+              ".ocwwwwco.",
+              "oc.owwo.co",
+              ".oc....co.",
+              "..oooooo.."],
+    "stasis": ["..oooooo..",
+               "..occcco..",
+               "...occo...",
+               "...occo...",
+               "..occcco.."],
+    "hexer": ["...oooo...",
+              "..occcco..",
+              ".ocwoowco.",
+              ".occccccco",
+              "..o.oo.o.."],
+    "overclock": ["...oyyo...",
+                  "..oyccyo..",
+                  ".oyccccyo.",
+                  "..oyccyo..",
+                  "...oyyo..."],
+    "mint": ["..oooooo..",
+             ".occwwcco.",
+             ".ocwccwco.",
+             ".occwwcco.",
+             "..oooooo.."],
+    "exec": [".....o....",
+             "....owo...",
+             "...owwco..",
+             "..owwcco..",
+             "..ooccoo.."],
+    "phoenix": ["o...oo...o",
+                "oo.oyyo.oo",
+                ".oocyycoo.",
+                "..occcco..",
+                "...ocyco.."],
+    "midas": ["...oyyo...",
+              "..oyyyyo..",
+              ".oyywwyyo.",
+              ".oyywwyyo.",
+              "..oyyyyo.."],
+    "thunder": ["..oooooo..",
+                ".ocyyyyco.",
+                "..ocyyco..",
+                ".ocyyyyco.",
+                "..oocyoo.."],
+    "chronos": [".oooooooo.",
+                ".occwwcco.",
+                "..occcco..",
+                "..occcco..",
+                ".occwwcco."],
+    "reaper": ["...oooo...",
+               "..occcco..",
+               ".ocwccwco.",
+               ".occoocco.",
+               "..ocwwco.."],
     "toxin": ["...oooo...",
               "....occo..",
               "...occcco.",
               "..occyccco",
               ".occccccco"],
 }
-TOWER_ORDER = ["archer", "cannon", "frost", "tesla", "sniper", "toxin", "laser", "mortar", "beacon", "void"]
+TOWER_ORDER = ["archer", "cannon", "frost", "tesla", "sniper", "toxin", "laser", "mortar", "beacon", "void",
+               "ballista", "flame", "shock", "stasis", "hexer", "overclock", "mint", "exec",
+               "phoenix", "midas", "thunder", "chronos", "reaper"]
+LEGEND_KEYS = {"phoenix", "midas", "thunder", "chronos", "reaper"}
+
+_LEGEND_BASE = [".oGGGGGGo.",
+                ".oGgggggGo",
+                ".oGgggggGo",
+                ".oGGGGGGo.",
+                "..oooooo.."]
 
 
 def tower_art(key):
-    return TOWER_TOPS[key] + _BASE
+    return TOWER_TOPS[key] + (_LEGEND_BASE if key in LEGEND_KEYS else _BASE)
 
 
 def tower_pal(color):
     r, g, b = color
     dark = (int(r * .6), int(g * .6), int(b * .6))
     return {"o": _O, "s": (150, 150, 165), "S": (100, 100, 118), "c": color, "C": dark,
-            "w": (255, 255, 255), "y": (255, 225, 80)}
+            "w": (255, 255, 255), "y": (255, 225, 80), "G": (255, 215, 80), "g": (170, 120, 30)}

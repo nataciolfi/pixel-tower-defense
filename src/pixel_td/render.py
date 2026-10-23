@@ -1,4 +1,5 @@
 """World rendering: map, enemies (batched blits), towers, effects, overlays."""
+import math
 import numpy as np
 import pygame
 from .config import *
@@ -34,7 +35,7 @@ class WorldRenderer:
         ox, oy = MAP_X + sx, MAP_Y + sy
         screen.set_clip(MAP_RECT)
         screen.fill((30, 50, 30), MAP_RECT)
-        screen.blit(self.sp.map, (ox, oy))
+        screen.blit(self.sp.maps[sim.map.key], (ox, oy))
         self._enemies(screen, sim, ox, oy)
         self._towers(screen, g, ox, oy)
         fx.draw(screen, ox, oy)
@@ -79,6 +80,10 @@ class WorldRenderer:
         sim = g.sim
         for t in sorted(sim.towers, key=lambda t: t.y):
             x, y = int(t.x) + ox, int(t.y) + oy
+            if t.tt.legendary:                         # pulsing golden aura marks legends
+                r = 24 + int(3 * math.sin(g.sim.time * 3.0))
+                pygame.draw.circle(screen, (255, 215, 80), (x, y + 6), r, 2)
+                pygame.draw.circle(screen, (255, 160, 40), (x, y + 6), r + 4, 1)
             screen.blit(self.sp.tower[TOWER_TYPES.index(t.tt)], (x - 20, y - 28))
             for s in range(min(5, t.level // 10)):
                 screen.fill((255, 225, 80), (x - 10 + s * 6, y - 32, 4, 4))
@@ -86,6 +91,10 @@ class WorldRenderer:
                 pygame.draw.circle(screen, (255, 255, 230), (x, y - 14), 6)
             if t.buff > 1.0:
                 screen.fill((255, 200, 60), (x + 12, y - 28, 4, 4))
+            if t.haste > 1.0:
+                screen.fill((200, 255, 80), (x + 12, y - 22, 4, 4))
+            if t.prio:
+                screen.fill({1: (255, 90, 90), 2: (255, 160, 60), 3: (255, 225, 80)}[t.prio], (x - 18, y - 28, 6, 6))
             if t.level > 1:
                 img = self._text(str(t.level), (255, 255, 255), self.f[12])
                 screen.blit(img, (x - img.get_width() // 2, y + 12))
@@ -109,7 +118,8 @@ class WorldRenderer:
             gx, gy = g.snap(mx - MAP_X, my - MAP_Y)
             ok = sim.can_place(gx, gy)
             col = (120, 255, 120) if ok else (255, 90, 90)
-            pygame.draw.circle(screen, col, (gx + ox, gy + oy), int(tt.range), 1)
+            if tt.range > 0:
+                pygame.draw.circle(screen, col, (gx + ox, gy + oy), int(tt.range), 1)
             ghost = self.sp.tower[g.placing].copy()
             ghost.set_alpha(190 if ok else 90)
             screen.blit(ghost, (gx + ox - 20, gy + oy - 28))
